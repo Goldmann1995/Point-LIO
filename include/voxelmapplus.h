@@ -17,7 +17,7 @@
 #include <visualization_msgs/MarkerArray.h>
 #include <cmath>
 #include <random>
-
+#include "parameters.h"
 #define HASH_P 116101
 #define MAX_N 10000000000
 
@@ -26,7 +26,7 @@ static int plane_id = 0;
 static int update_size_threshold;
 static int max_points_size;
 static int sigma_num;
-static double planer_threshold;
+// static double planer_threshold;
 static double voxel_size;
 static double quater_length;
 
