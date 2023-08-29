@@ -1,5 +1,7 @@
 // #include <../include/IKFoM/IKFoM_toolkit/esekfom/esekfom.hpp>
 #include "Estimator.h"
+std::vector<M3D> body_var;
+std::unordered_map<VOXEL_LOC, UnionFindNode *> voxel_map;
 
 PointCloudXYZI::Ptr normvec(new PointCloudXYZI(100000, 1));
 std::vector<int> time_seq;
