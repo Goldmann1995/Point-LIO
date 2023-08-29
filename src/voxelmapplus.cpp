@@ -1,123 +1,7 @@
-#ifndef VOXEL_MAP_UTIL_HPP
-#define VOXEL_MAP_UTIL_HPP
 
-#include "common_lib.h"
-#include "omp.h"
-#include <Eigen/Core>
-#include <Eigen/Dense>
-#include <Eigen/StdVector>
-#include <execution>
-#include <openssl/md5.h>
-#include <pcl/common/io.h>
-#include <rosbag/bag.h>
-#include <cstdio>
-#include <string>
-#include <unordered_map>
-#include <visualization_msgs/Marker.h>
-#include <visualization_msgs/MarkerArray.h>
-#include <cmath>
-#include <random>
+#include "voxelmapplus.h"
 
-#define HASH_P 116101
-#define MAX_N 10000000000
-
-/*** Common Param ***/
-static int plane_id = 0;
-static int update_size_threshold;
-static int max_points_size;
-static int sigma_num;
-static double planer_threshold;
-static double voxel_size;
-static double quater_length;
-
-/*** Point to Plane Matching Structure ***/
-typedef struct ptpl {
-    V3D point;
-    V3D point_world;
-    V3D omega;
-    double omega_norm = 0;
-    double dist = 0;
-    M3D plane_cov;
-    int main_direction = 0;
-} ptpl;
-
-/*** 3D Point with Covariance ***/
-typedef struct pointWithCov {
-    V3D point;
-    V3D point_world;
-    Eigen::Matrix3d cov;
-} pointWithCov;
-
-/*** Plane Structure ***/
-typedef struct Plane {
-    /*** Update Flag ***/
-    bool is_plane = false;
-    bool is_init = false;
-    
-    /*** Plane Param ***/
-    int main_direction = 0; //0:ax+by+z+d=0;  1:ax+y+bz+d=0;  2:x+ay+bz+d=0;
-    M3D plane_cov;
-    V3D n_vec;
-    bool isRootPlane = true;
-    int rgb[3] = {0, 0, 0};
-
-    /*** Incremental Calculation Param ***/
-    double xx = 0.0;
-    double yy = 0.0;
-    double zz = 0.0;
-    double xy = 0.0;
-    double xz = 0.0;
-    double yz = 0.0;
-    double x = 0.0;
-    double y = 0.0;
-    double z = 0.0;
-    V3D center = V3D::Zero();
-    Eigen::Matrix3d covariance = M3D::Zero();
-    int points_size = 0;
-
-} Plane;
-typedef std::shared_ptr<Plane> PlanePtr;
-typedef const std::shared_ptr<Plane> PlaneConstPtr;
-
-class VOXEL_LOC {
-public:
-    int64_t x, y, z;
-
-    VOXEL_LOC(int64_t vx, int64_t vy, int64_t vz)
-            : x(vx), y(vy), z(vz) {}
-
-    bool operator==(const VOXEL_LOC &other) const {
-        return (x == other.x && y == other.y && z == other.z);
-    }
-};
-
-// Hash value
-namespace std {
-    template<>
-    struct hash<VOXEL_LOC> {
-        int64_t operator()(const VOXEL_LOC &s) const {
-            using std::hash;
-            using std::size_t;
-            return ((((s.z) * HASH_P) % MAX_N + (s.y)) * HASH_P) % MAX_N + (s.x);
-        }
-    };
-} // namespace std
-
-class UnionFindNode {
-public:
-    std::vector<pointWithCov> temp_points_; // all points in an octo tree
-    PlanePtr plane_ptr_;
-    double voxel_center_[3]{}; // x, y, z
-    int all_points_num_;
-    int new_points_num_;
-    
-    bool init_node_;
-    bool update_enable_;
-    bool is_plane;
-    int id;
-    UnionFindNode *rootNode;
-
-    UnionFindNode(){
+UnionFindNode::UnionFindNode(){
         temp_points_.clear();
         new_points_num_ = 0;
         all_points_num_ = 0;
@@ -136,7 +20,7 @@ public:
     }
 
     /*** Finish ***/
-    void InitPlane(const std::vector<pointWithCov> &points, const PlanePtr& plane, UnionFindNode* node) const {
+void UnionFindNode::InitPlane(const std::vector<pointWithCov> &points, const PlanePtr& plane, UnionFindNode* node) const {
         /*** Incremental Calculation about Covariance and SigmaXX ***/
         V3D last_center = plane->center;
         int last_size = plane->points_size;
@@ -308,7 +192,7 @@ public:
         }
     }
 
-    void InitUnionFindNode() {
+void UnionFindNode::InitUnionFindNode() {
         if (temp_points_.size() > update_size_threshold) {
             //init_plane(temp_points_, plane_ptr_);
             InitPlane(temp_points_, plane_ptr_, this);
@@ -323,7 +207,7 @@ public:
         }
     }
 
-    void UpdatePlane(const pointWithCov &pv,
+void UnionFindNode::UpdatePlane(const pointWithCov &pv,
                      VOXEL_LOC &position, std::unordered_map<VOXEL_LOC, UnionFindNode *> &feat_map) {
         if (!init_node_) {
             new_points_num_++;
@@ -451,7 +335,6 @@ public:
         }
     }
 
-};
 
 void MapJet(double v, double vmin, double vmax, uint8_t &r, uint8_t &g,
             uint8_t &b) {
@@ -627,22 +510,21 @@ void BuildSingleResidual(const pointWithCov &pv, const UnionFindNode *currentNod
 
 void BuildResidualListOMP(const unordered_map<VOXEL_LOC, UnionFindNode *> &voxel_map,
                           const std::vector<pointWithCov> &pv_list,
-                          std::vector<ptpl> &ptpl_list,
-                          std::vector<V3D> &non_match) {
+                          std::vector<ptpl> &ptpl_list) {
     std::mutex mylock;
     ptpl_list.clear();
-    std::vector<ptpl> all_ptpl_list(pv_list.size());
-    std::vector<bool> useful_ptpl(pv_list.size());
-    std::vector<size_t> index(pv_list.size());
-    for (size_t i = 0; i < index.size(); ++i) {
-        index[i] = i;
-        useful_ptpl[i] = false;
-    }
+    // std::vector<ptpl> all_ptpl_list(pv_list.size());
+    // std::vector<bool> useful_ptpl(pv_list.size());
+    // std::vector<size_t> index(pv_list.size());
+    // for (size_t i = 0; i < index.size(); ++i) {
+    //     index[i] = i;
+    //     useful_ptpl[i] = false;
+    // }
 //#ifdef MP_EN
 //    omp_set_num_threads(MP_PROC_NUM);
 //#pragma omp parallel for
 //#endif
-    for (int i = 0; i < index.size(); i++) {
+    for (int i = 0; i < pv_list.size(); i++) {
         const pointWithCov& pv = pv_list[i];
         double loc_xyz[3];
         for (int j = 0; j < 3; j++) {
@@ -698,23 +580,24 @@ void BuildResidualListOMP(const unordered_map<VOXEL_LOC, UnionFindNode *> &voxel
             }
             if (is_sucess) {
                 mylock.lock();
-                useful_ptpl[i] = true;
-                all_ptpl_list[i] = single_ptpl;
+                // useful_ptpl[i] = true;
+                ptpl_list[i] = single_ptpl;
                 mylock.unlock();
-            } else {
-                mylock.lock();
-                useful_ptpl[i] = false;
-                mylock.unlock();
-            }
+             } 
+            //  else {
+            //     mylock.lock();
+            //     useful_ptpl[i] = false;
+            //     mylock.unlock();
+            // }
         }
     }
-    for (size_t i = 0; i < useful_ptpl.size(); i++) {
-        if (useful_ptpl[i]) {
-            ptpl_list.push_back(all_ptpl_list[i]);
-        } else {
-            non_match.push_back(all_ptpl_list[i].point);
-        }
-    }
+    // for (size_t i = 0; i < useful_ptpl.size(); i++) {
+    //     if (useful_ptpl[i]) {
+    //         ptpl_list.push_back(all_ptpl_list[i]);
+    //     } else {
+    //         non_match.push_back(all_ptpl_list[i].point);
+    //     }
+    // }
 }
 
 /*** Visualization Function ***/
@@ -862,5 +745,3 @@ void calcBodyCov(V3D &pb, const float range_inc,
     cov = direction * range_var * direction.transpose() +
           A * direction_var * A.transpose();
 }
-
-#endif
