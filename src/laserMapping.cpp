@@ -26,7 +26,7 @@
 #include "parameters.h"
 #include "Estimator.h"
 // #include <ros/console.h>
-#include "voxelmapplus_util.hpp"
+#include "voxelmapplus.h"
 
 #define MAXN                (720000)
 #define PUBFRAME_PERIOD     (20)
@@ -34,8 +34,6 @@
 bool flg_EKF_inited = false;
 int feats_undistort_size = 0;
 const float MOV_THRESHOLD = 1.5f;
-std::unordered_map<VOXEL_LOC, UnionFindNode *> voxel_map;
-std::vector<M3D> body_var;
 
 mutex mtx_buffer;
 condition_variable sig_buffer;
@@ -80,6 +78,11 @@ sensor_msgs::Imu::ConstPtr imu_last_ptr;
 nav_msgs::Path path;
 nav_msgs::Odometry odomAftMapped;
 geometry_msgs::PoseStamped msg_body_pose;
+
+const bool var_contrast(pointWithCov &x, pointWithCov &y) {
+    return (x.cov.diagonal().norm() < y.cov.diagonal().norm());
+};
+
 
 void SigHandle(int sig)
 {
@@ -766,7 +769,7 @@ int main(int argc, char** argv)
     p_imu->imu_en = imu_en;
 
     kf_input.init_dyn_share_modified(get_f_input, df_dx_input, h_model_input);
-    kf_output.init_dyn_share_modified_2h(get_f_output, df_dx_output, h_model_output, h_model_IMU_output);
+    kf_output.init_dyn_share_modified_2h(get_f_output, df_dx_output, h_model_output_modified, h_model_IMU_output);
     Eigen::Matrix<double, 24, 24> P_init = MD(24,24)::Identity() * 0.01;
     P_init.block<3, 3>(21, 21) = MD(3,3)::Identity() * 0.0001;
     P_init.block<6, 6>(15, 15) = MD(6,6)::Identity() * 0.001;
@@ -1361,10 +1364,30 @@ int main(int argc, char** argv)
             /*** add the feature points to map kdtree ***/
             t3 = omp_get_wtime();
             
-            // if(feats_down_size > 4)
-            // {
-            //     map_incremental();
-            // }
+            /***  Update Voxel Map ***/
+
+            std::vector<pointWithCov> pv_list;
+            pointWithCov pv;
+            M3D state_rot = kf_output.get_x().rot.toRotationMatrix();
+            M3D state_cov_pos = kf_output.get_P().block<3, 3>(0, 0);
+            M3D state_cov_rot = kf_output.get_P().block<3, 3>(3, 3);
+            M3D cov;
+            for (int i = 0; i < feats_down_size; i++) {
+                
+                pointBodyToWorld(&(feats_down_body->points[i]), &(feats_down_world->points[i]));
+                pv.point << feats_down_world->points[i].x, feats_down_world->points[i].y, feats_down_world->points[i].z;
+                // M3D point_crossmat = crossmat_list[i];
+                // M3D cov = body_var[i];
+                cov = state_rot * body_var[i] * state_rot.transpose() +
+                      (-crossmat_list[i]) * state_cov_pos *
+                      (-crossmat_list[i]).transpose() +
+                      state_cov_rot;
+                pv.cov = cov;
+                pv_list.push_back(pv);
+            }
+            std::sort(pv_list.begin(), pv_list.end(), var_contrast);
+            UpdateVoxelMap(pv_list,voxel_map);
+
 
             t5 = omp_get_wtime();
             /******* Publish points *******/
