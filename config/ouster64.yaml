@@ -1,6 +1,6 @@
 common:
     lid_topic:  "/os_cloud_node/points"
-    imu_topic:  "/os_cloud_node/imu"
+    imu_topic:   "/xsens_mti_node/imu/data"
     con_frame: false # true: if you need to combine several LiDAR frames into one
     con_frame_num: 1 # the number of frames combined
     cut_frame: false # true: if you need to cut one LiDAR frame into several subframes
@@ -10,9 +10,9 @@ common:
 
 preprocess:
     lidar_type: 3 # 2 #velodyne                # 1 Livox Avia LiDAR
-    scan_line: 32 # 32 #velodyne 6 avia
+    scan_line: 128 # 32 #velodyne 6 avia
     timestamp_unit: 3           # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
-    blind: 0.20
+    blind: 2.0
 
 mapping:
     imu_en: true
@@ -43,6 +43,12 @@ mapping:
                    0, 1, 0,
                    0, 0, 1 ]
 
+noise_model:
+  ranging_cov: 0.02
+  angle_cov: 0.1
+  acc_cov_scale: 1.0
+  gyr_cov_scale: 0.5
+
 odometry: 
     publish_odometry_without_downsample: false
 
@@ -50,6 +56,9 @@ publish:
     path_en: true                 # false: close the path output
     scan_publish_en: true         # false: close all the point cloud output
     scan_bodyframe_pub_en: false  # true: output the point cloud scans in IMU-body-frame
+
+visualization: 
+    pub_voxel_map: false
 
 pcd_save:
     pcd_save_en: false
