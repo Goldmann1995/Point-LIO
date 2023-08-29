@@ -37,7 +37,7 @@ extern bool   scan_pub_en, scan_body_pub_en;
 extern shared_ptr<Preprocess> p_pre;
 extern double time_lag_imu_to_lidar;
 extern bool publish_voxel_map;
-extern double ranging_cov;
+extern double ranging_cov, planer_threshold;
 extern double angle_cov;
 
 void readParameters(ros::NodeHandle &n);

@@ -31,7 +31,7 @@ double time_lag_imu_to_lidar = 0.0;
 
 
 bool publish_voxel_map;
-double ranging_cov;
+double ranging_cov , planer_threshold;
 double angle_cov;
 
 void readParameters(ros::NodeHandle &nh)
@@ -95,6 +95,7 @@ void readParameters(ros::NodeHandle &nh)
   nh.param<double>("noise_model/ranging_cov", ranging_cov, 0.02);
   nh.param<double>("noise_model/angle_cov", angle_cov, 0.05);
 
+  nh.param<double>("mapping/plannar_threshold", planer_threshold, 0.01);
 
   nh.param<bool>("visualization/pub_voxel_map", publish_voxel_map, false);
   std::cout << "publishe_voxel_map:" << publish_voxel_map << std::endl;
