@@ -35,6 +35,7 @@ bool flg_EKF_inited = false;
 int feats_undistort_size = 0;
 const float MOV_THRESHOLD = 1.5f;
 std::unordered_map<VOXEL_LOC, UnionFindNode *> voxel_map;
+std::vector<M3D> body_var;
 
 mutex mtx_buffer;
 condition_variable sig_buffer;
@@ -993,29 +994,7 @@ int main(int argc, char** argv)
             }
             time_seq = time_compressing<int>(feats_down_body);
             feats_down_size = feats_down_body->points.size();
-            
-            // /*** initialize the map kdtree ***/
-            // if(!init_map)
-            // {
-            //     if(ikdtree.Root_Node == nullptr) //
-            //     // if(feats_down_size > 5)
-            //     {
-            //         ikdtree.set_downsample_param(filter_size_map_min);
-            //     }
-                    
-            //     feats_down_world->resize(feats_down_size);
-            //     for(int i = 0; i < feats_down_size; i++)
-            //     {
-            //         pointBodyToWorld(&(feats_down_body->points[i]), &(feats_down_world->points[i]));
-            //     }
-            //     for (size_t i = 0; i < feats_down_world->size(); i++) {
-            //     init_feats_world->points.emplace_back(feats_down_world->points[i]);}
-            //     if(init_feats_world->size() < init_map_size) continue;
-            //     ikdtree.Build(init_feats_world->points); 
-            //     init_map = true;
-            //     publish_init_kdtree(pubLaserCloudMap); //(pubLaserCloudFullRes);
-            //     continue;
-            // }        
+        
             /*** ICP and Kalman filter update ***/
             normvec->resize(feats_down_size);
             feats_down_world->resize(feats_down_size);
@@ -1028,13 +1007,20 @@ int main(int argc, char** argv)
             crossmat_list.reserve(feats_down_size);
             pbody_list.reserve(feats_down_size);
             // pbody_ext_list.reserve(feats_down_size);
-                          
+
+            /***  Calculate Body Cov ***/      
             for (size_t i = 0; i < feats_down_body->size(); i++)
             {
                 V3D point_this(feats_down_body->points[i].x,
                             feats_down_body->points[i].y,
                             feats_down_body->points[i].z);
+                if (point_this[2] == 0) {
+                    point_this[2] = 0.001;
+                }
                 pbody_list[i]=point_this;
+                // Calculate Body Cov processing before point to IMUframe
+                M3D cov;
+                calcBodyCov(point_this, ranging_cov, angle_cov, cov);
                 if (extrinsic_est_en)
                 {
                     if (!use_imu_as_input)
@@ -1053,6 +1039,10 @@ int main(int argc, char** argv)
                 M3D point_crossmat;
                 point_crossmat << SKEW_SYM_MATRX(point_this);
                 crossmat_list[i]=point_crossmat;
+ 
+                // M3D rot_var = kf_output.get_P().block<3, 3>(0, 0);
+                // M3D t_var = kf_output.get_P().block<3, 3>(3, 3);
+                body_var.push_back(cov);
             }
             
             if (!use_imu_as_input)
