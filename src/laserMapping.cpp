@@ -26,12 +26,15 @@
 #include "parameters.h"
 #include "Estimator.h"
 // #include <ros/console.h>
-
+#include "voxelmapplus_util.hpp"
 
 #define MAXN                (720000)
 #define PUBFRAME_PERIOD     (20)
-
+#define INIT_TIME (0.1)
+bool flg_EKF_inited = false;
+int feats_undistort_size = 0;
 const float MOV_THRESHOLD = 1.5f;
+std::unordered_map<VOXEL_LOC, UnionFindNode *> voxel_map;
 
 mutex mtx_buffer;
 condition_variable sig_buffer;
@@ -791,23 +794,26 @@ int main(int argc, char** argv)
 
     /*** ROS subscribe initialization ***/
     ros::Subscriber sub_pcl = p_pre->lidar_type == AVIA ? \
-        nh.subscribe(lid_topic, 200000, livox_pcl_cbk) : \
-        nh.subscribe(lid_topic, 200000, standard_pcl_cbk);
+        nh.subscribe(lid_topic, 2000, livox_pcl_cbk) : \
+        nh.subscribe(lid_topic, 2000, standard_pcl_cbk);
     ros::Subscriber sub_imu = nh.subscribe(imu_topic, 200000, imu_cbk);
     ros::Publisher pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2>
-            ("/cloud_registered", 100000);
+            ("/cloud_registered", 100);
     ros::Publisher pubLaserCloudFullRes_body = nh.advertise<sensor_msgs::PointCloud2>
-            ("/cloud_registered_body", 100000);
+            ("/cloud_registered_body", 100);
     ros::Publisher pubLaserCloudEffect  = nh.advertise<sensor_msgs::PointCloud2>
-            ("/cloud_effected", 100000);
+            ("/cloud_effected", 100);
     ros::Publisher pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>
-            ("/Laser_map", 100000);
+            ("/Laser_map", 100);
     ros::Publisher pubOdomAftMapped = nh.advertise<nav_msgs::Odometry> 
-            ("/aft_mapped_to_init", 100000);
+            ("/aft_mapped_to_init", 100);
     ros::Publisher pubPath          = nh.advertise<nav_msgs::Path> 
-            ("/path", 100000);
+            ("/path", 100);
     ros::Publisher plane_pub = nh.advertise<visualization_msgs::Marker>
             ("/planner_normal", 1000);
+
+    ros::Publisher voxel_map_pub =
+        nh.advertise<visualization_msgs::MarkerArray>("/planes", 1000);
 //------------------------------------------------------------------------------------------------------
     signal(SIGINT, SigHandle);
     ros::Rate rate(5000);
@@ -911,7 +917,67 @@ int main(int argc, char** argv)
                 }
             }
             /*** Segment the map in lidar FOV ***/
-            lasermap_fov_segment();
+            // lasermap_fov_segment();
+            flg_EKF_inited = (Measures.lidar_beg_time - first_lidar_time) < INIT_TIME
+                             ? false
+                             : true;
+
+            /*** Build Voxel Map ***/
+            if (flg_EKF_inited && !init_map) {
+                feats_undistort_size = feats_undistort->points.size();
+                feats_down_world->resize(feats_undistort_size);
+                std::vector<pointWithCov> pv_list;
+                pointWithCov pv;
+                V3D point_this;
+                M3D cov;
+                M3D point_crossmat;
+                V3D sigma_pv;
+                for(int i = 0; i < feats_undistort_size; i++)
+                {
+                    pointBodyToWorld(&(feats_undistort->points[i]), &(feats_down_world->points[i]));
+                    pv.point << feats_down_world->points[i].x, feats_down_world->points[i].y,
+                            feats_down_world->points[i].z;
+                    point_this << feats_undistort->points[i].x,
+                                   feats_undistort->points[i].y,
+                                   feats_undistort->points[i].z;
+                    // if z=0, error will occur in calcBodyCov. To be solved
+                    if (point_this[2] == 0) {
+                        point_this[2] = 0.001;
+                    }
+
+                    calcBodyCov(point_this, ranging_cov, angle_cov, cov);
+
+                    // point_this += Lidar_offset_to_IMU;
+
+                    point_crossmat << SKEW_SYM_MATRX(point_this);
+                    cov = state_out.rot.toRotationMatrix() * cov * state_out.rot.toRotationMatrix().transpose() +
+                          (-point_crossmat) * kf_output.get_P().block<3, 3>(0, 0) *
+                          (-point_crossmat).transpose() +
+                          kf_output.get_P().block<3, 3>(3, 3);
+                    pv.cov = cov;
+                    pv_list.push_back(pv);
+                    sigma_pv = pv.cov.diagonal();
+                    sigma_pv[0] = sqrt(sigma_pv[0]);
+                    sigma_pv[1] = sqrt(sigma_pv[1]);
+                    sigma_pv[2] = sqrt(sigma_pv[2]);
+                }
+
+                BuildVoxelMap(pv_list,voxel_map);
+                std::cout << "build voxel map" << std::endl;
+                // if (write_kitti_log) {
+                //     kitti_log(fp_kitti);
+                // }
+
+                // scanIdx++;
+                if (publish_voxel_map) {
+                    pubVoxelMap(voxel_map, voxel_map_pub);
+                }
+                init_map = true;
+                cout << "Finish First Frame" << endl;
+                continue;
+            }
+
+
             /*** downsample the feature points in a scan ***/
             t1 = omp_get_wtime();
             if(space_down_sample)
@@ -928,28 +994,28 @@ int main(int argc, char** argv)
             time_seq = time_compressing<int>(feats_down_body);
             feats_down_size = feats_down_body->points.size();
             
-            /*** initialize the map kdtree ***/
-            if(!init_map)
-            {
-                if(ikdtree.Root_Node == nullptr) //
-                // if(feats_down_size > 5)
-                {
-                    ikdtree.set_downsample_param(filter_size_map_min);
-                }
+            // /*** initialize the map kdtree ***/
+            // if(!init_map)
+            // {
+            //     if(ikdtree.Root_Node == nullptr) //
+            //     // if(feats_down_size > 5)
+            //     {
+            //         ikdtree.set_downsample_param(filter_size_map_min);
+            //     }
                     
-                feats_down_world->resize(feats_down_size);
-                for(int i = 0; i < feats_down_size; i++)
-                {
-                    pointBodyToWorld(&(feats_down_body->points[i]), &(feats_down_world->points[i]));
-                }
-                for (size_t i = 0; i < feats_down_world->size(); i++) {
-                init_feats_world->points.emplace_back(feats_down_world->points[i]);}
-                if(init_feats_world->size() < init_map_size) continue;
-                ikdtree.Build(init_feats_world->points); 
-                init_map = true;
-                publish_init_kdtree(pubLaserCloudMap); //(pubLaserCloudFullRes);
-                continue;
-            }        
+            //     feats_down_world->resize(feats_down_size);
+            //     for(int i = 0; i < feats_down_size; i++)
+            //     {
+            //         pointBodyToWorld(&(feats_down_body->points[i]), &(feats_down_world->points[i]));
+            //     }
+            //     for (size_t i = 0; i < feats_down_world->size(); i++) {
+            //     init_feats_world->points.emplace_back(feats_down_world->points[i]);}
+            //     if(init_feats_world->size() < init_map_size) continue;
+            //     ikdtree.Build(init_feats_world->points); 
+            //     init_map = true;
+            //     publish_init_kdtree(pubLaserCloudMap); //(pubLaserCloudFullRes);
+            //     continue;
+            // }        
             /*** ICP and Kalman filter update ***/
             normvec->resize(feats_down_size);
             feats_down_world->resize(feats_down_size);

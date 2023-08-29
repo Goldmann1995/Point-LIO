@@ -29,6 +29,11 @@ bool   scan_pub_en, scan_body_pub_en;
 shared_ptr<Preprocess> p_pre;
 double time_lag_imu_to_lidar = 0.0;
 
+
+bool publish_voxel_map;
+double ranging_cov;
+double angle_cov;
+
 void readParameters(ros::NodeHandle &nh)
 {
   p_pre.reset(new Preprocess());
@@ -86,5 +91,12 @@ void readParameters(ros::NodeHandle &nh)
   nh.param<bool>("runtime_pos_log_enable", runtime_pos_log, 0);
   nh.param<bool>("pcd_save/pcd_save_en", pcd_save_en, false);
   nh.param<int>("pcd_save/interval", pcd_save_interval, -1);
+
+  nh.param<double>("noise_model/ranging_cov", ranging_cov, 0.02);
+  nh.param<double>("noise_model/angle_cov", angle_cov, 0.05);
+
+
+  nh.param<bool>("visualization/pub_voxel_map", publish_voxel_map, false);
+  std::cout << "publishe_voxel_map:" << publish_voxel_map << std::endl;
 }
 
