@@ -352,6 +352,106 @@ void h_model_output(state_output &s, esekfom::dyn_share_modified<double> &ekfom_
 	effct_feat_num += effect_num_k;
 }
 
+void h_model_output_modified(state_output &s, esekfom::dyn_share_modified<double> &ekfom_data)
+{
+	bool match_in_map = false;
+	pointWithCov pv;	
+    std::vector<ptpl> ptpl_list;
+    std::vector<pointWithCov> pv_list;
+
+	int effect_num_k = 0;
+	for (int j = 0; j < time_seq[k]; j++)
+	{
+		PointType &point_body_j  = feats_down_body->points[idx+j+1];
+		PointType &point_world_j = feats_down_world->points[idx+j+1];
+		pointBodyToWorld(&point_body_j, &point_world_j); 
+
+		pv.point_world << point_world_j.x, point_world_j.y, point_world_j.z;
+		pv.point << point_body_j.x, point_body_j.y, point_body_j.z;
+		M3D& cov = body_var[idx+j+1];
+		M3D& point_crossmat = crossmat_list[idx+j+1];
+		M3D rot_var =  kf_output.get_P() .block<3, 3>(0, 0);
+		M3D t_var = kf_output.get_P().block<3, 3>(3, 3);
+		cov = s.rot.toRotationMatrix() * cov * s.rot.toRotationMatrix() +
+				(-point_crossmat) * rot_var * (-point_crossmat.transpose()) +
+				t_var;
+		pv.cov = cov;
+		pv_list.push_back(pv);
+	}
+    
+	BuildResidualListOMP(voxel_map, pv_list, ptpl_list);
+	effect_num_k = ptpl_list.size();
+	if (effect_num_k == 0) 
+	{
+		ekfom_data.valid = false;
+		return;
+	}
+	ekfom_data.M_Noise = laser_point_cov;
+	ekfom_data.h_x = Eigen::MatrixXd::Zero(effect_num_k, 12);
+	ekfom_data.z.resize(effect_num_k);
+	ekfom_data.R.resize(effect_num_k, 1);
+	Eigen::Matrix<double, 1, 3> J_abd;
+	Eigen::Matrix<double, 1, 3> J_pw;
+	J_abd.setZero();
+	J_pw.setZero();
+
+	for (int j = 0; j < effect_num_k; j++)
+	{
+            V3D laser_p = ptpl_list[j].point;
+			V3D point_this(laser_p(0), laser_p(1), laser_p(2));
+			M3D cov;
+			calcBodyCov(point_this, ranging_cov, angle_cov, cov);
+			V3D norm_vec(ptpl_list[j].omega(0), ptpl_list[j].omega(1), ptpl_list[j].omega(2));
+			if (extrinsic_est_en)
+			{
+				// V3D p_body = pbody_list[idx+j+1];
+				M3D p_crossmat, p_imu_crossmat;
+				p_crossmat << SKEW_SYM_MATRX(point_this);
+				V3D point_imu = s.offset_R_L_I.normalized() * point_this + s.offset_T_L_I;
+				p_imu_crossmat << SKEW_SYM_MATRX(point_imu);
+				V3D C(s.rot.conjugate().normalized() * norm_vec);
+				V3D A(p_imu_crossmat * C);
+				V3D B(p_crossmat * s.offset_R_L_I.conjugate().normalized() * C);
+				ekfom_data.h_x.block<1, 12>(j, 0) << norm_vec(0), norm_vec(1), norm_vec(2), VEC_FROM_ARRAY(A), VEC_FROM_ARRAY(B), VEC_FROM_ARRAY(C);
+			}
+			else
+			{   
+                point_this = Lidar_R_wrt_IMU * point_this + Lidar_T_wrt_IMU;
+				M3D point_crossmat;
+                point_crossmat << SKEW_SYM_MATRX(point_this);
+				// M3D point_crossmat = crossmat_list[idx+j+1];
+				V3D C(s.rot.conjugate().normalized() * norm_vec);
+				V3D A(point_crossmat * C);
+				// V3D A(point_crossmat * state.rot_end.transpose() * norm_vec);
+				ekfom_data.h_x.block<1, 12>(j, 0) << norm_vec(0), norm_vec(1), norm_vec(2), VEC_FROM_ARRAY(A), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0;
+			}
+			//Calculate R_inv
+			V3D point_world = ptpl_list[j].point_world;
+			V3D Omega = ptpl_list[j].omega;
+			double Omega_norm = ptpl_list[j].omega_norm;
+			double dist = ptpl_list[j].dist;
+			if (ptpl_list[j].main_direction == 0) { // ax+by+z+d = 0;
+				J_abd << point_world(0) * (1 - dist / (Omega_norm * Omega_norm)),
+						point_world(1) * (1 - dist / (Omega_norm * Omega_norm)), 1;
+			} else if (ptpl_list[j].main_direction == 1) { // ax+y+bz+d = 0;
+				J_abd << point_world(0) * (1 - dist / (Omega_norm * Omega_norm)),
+						point_world(2) * (1 - dist / (Omega_norm * Omega_norm)), 1;
+			} else { // x+ay+bz+d = 0;
+				J_abd << point_world(1) * (1 - dist / (Omega_norm * Omega_norm)),
+						point_world(2) * (1 - dist / (Omega_norm * Omega_norm)), 1;
+            }
+
+			J_abd /= Omega_norm;
+			J_pw = Omega.transpose() * s.rot.toRotationMatrix() / Omega_norm;
+			double sigma_l = J_abd * ptpl_list[j].plane_cov * J_abd.transpose();
+			ekfom_data.z(j) = - ptpl_list[j].dist;
+			ekfom_data.R(j) = (sigma_l + J_pw * cov * J_pw.transpose());
+
+	}
+	effct_feat_num += effect_num_k;
+}
+
+
 void h_model_IMU_output(state_output &s, esekfom::dyn_share_modified<double> &ekfom_data)
 {
     std::memset(ekfom_data.satu_check, false, 6);
