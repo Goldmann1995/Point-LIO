@@ -66,6 +66,8 @@ struct dyn_share_modified
 	T M_Noise;
 	Eigen::Matrix<T, Eigen::Dynamic, 1> z;
 	Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> h_x;
+	Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> R;
+
 	Eigen::Matrix<T, 6, 1> z_IMU;
 	Eigen::Matrix<T, 6, 1> R_IMU;
 	bool satu_check[6];
@@ -198,6 +200,7 @@ public:
 			// Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> h_v = dyn_share.h_v;
 			dof_Measurement = h_x.rows();
 			m_noise = dyn_share.M_Noise;
+			auto R = dyn_share.R;
 			// dof_Measurement_noise = dyn_share.R.rows();
 			// vectorized_state dx, dx_new;
 			// x_.boxminus(dx, x_propagated);
@@ -213,7 +216,7 @@ public:
 				HPHT = h_x * PHT.topRows(12);
 				for (int m = 0; m < dof_Measurement; m++)
 				{
-					HPHT(m, m) += m_noise;
+					HPHT(m, m) += R(m);
 				}
 				K_= PHT*HPHT.inverse();
 			}
