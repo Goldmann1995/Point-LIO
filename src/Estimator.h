@@ -4,13 +4,15 @@
 #include <../include/IKFoM/IKFoM_toolkit/esekfom/esekfom.hpp>
 #include "common_lib.h"
 #include "parameters.h"
+#include "voxelmapplus.h"
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
 #include <ikd-Tree/ikd_Tree.h>
 #include <pcl/io/pcd_io.h>
-
+extern std::vector<M3D> body_var;
+extern std::unordered_map<VOXEL_LOC, UnionFindNode *> voxel_map;
 extern PointCloudXYZI::Ptr normvec; //(new PointCloudXYZI(100000, 1));
 extern std::vector<int> time_seq;
 extern PointCloudXYZI::Ptr feats_down_body; //(new PointCloudXYZI());
@@ -108,6 +110,8 @@ vect3 SO3ToEuler(const SO3 &orient);
 void h_model_input(state_input &s, esekfom::dyn_share_modified<double> &ekfom_data);
 
 void h_model_output(state_output &s, esekfom::dyn_share_modified<double> &ekfom_data);
+
+void h_model_output_modified(state_output &s, esekfom::dyn_share_modified<double> &ekfom_data);
 
 void h_model_IMU_output(state_output &s, esekfom::dyn_share_modified<double> &ekfom_data);
 
