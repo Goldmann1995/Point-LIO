@@ -999,10 +999,10 @@ int main(int argc, char** argv)
             feats_down_size = feats_down_body->points.size();
         
             /*** ICP and Kalman filter update ***/
-            normvec->resize(feats_down_size);
+            // normvec->resize(feats_down_size);
             feats_down_world->resize(feats_down_size);
 
-            Nearest_Points.resize(feats_down_size);
+            // Nearest_Points.resize(feats_down_size);
 
             t2 = omp_get_wtime();
             
