@@ -49,16 +49,16 @@ MTK_BUILD_MANIFOLD(state_input,
 );
 
 MTK_BUILD_MANIFOLD(state_output,
-((vect3, pos))
-((SO3, rot))
-((SO3, offset_R_L_I))
-((vect3, offset_T_L_I))
-((vect3, vel))
-((vect3, omg))
-((vect3, acc))
-((vect3, gravity))
-((vect3, bg))
-((vect3, ba))
+((vect3, pos))//0-2
+((SO3, rot))//3-5
+((SO3, offset_R_L_I))//6-8
+((vect3, offset_T_L_I))//9-11
+((vect3, vel))//12-14
+((vect3, omg))//15-17
+((vect3, acc))//18-20
+((vect3, gravity))//21-23
+((vect3, bg))//24-26
+((vect3, ba))//27-29
 );
 
 MTK_BUILD_MANIFOLD(input_ikfom,

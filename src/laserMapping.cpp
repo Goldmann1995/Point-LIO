@@ -1090,7 +1090,9 @@ int main(int argc, char** argv)
                             imu_upda_cov = true;
                             angvel_avr<<imu_next.angular_velocity.x, imu_next.angular_velocity.y, imu_next.angular_velocity.z;
                             acc_avr   <<imu_next.linear_acceleration.x, imu_next.linear_acceleration.y, imu_next.linear_acceleration.z;
-
+                            input_in.gyro<<imu_next.angular_velocity.x, imu_next.angular_velocity.y, imu_next.angular_velocity.z;
+                            input_in.acc<<imu_next.linear_acceleration.x, imu_next.linear_acceleration.y, imu_next.linear_acceleration.z;
+                                            
                             /*** covariance update ***/
                             imu_last = imu_next;
                             imu_next = *(imu_deque.front());
@@ -1130,7 +1132,9 @@ int main(int argc, char** argv)
                             time_update_last = time_current;   
                         }
                     }
+                    // std::cout << "before kf_output.get_x() = " << kf_output.get_x() << "\n";
                     kf_output.predict(dt, Q_output, input_in, true, false);
+
                     propag_time += omp_get_wtime() - propag_state_start;
                     time_predict_last_const = time_current;
                     // if(k == 0)

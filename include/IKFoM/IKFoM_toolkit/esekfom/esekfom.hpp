@@ -66,6 +66,7 @@ struct dyn_share_modified
 	T M_Noise;
 	Eigen::Matrix<T, Eigen::Dynamic, 1> z;
 	Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> h_x;
+	Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> h_x_T_R_inv;
 	Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> R;
 
 	Eigen::Matrix<T, 6, 1> z_IMU;
@@ -197,10 +198,13 @@ public:
 			Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> z = dyn_share.z;
 			// Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> R = dyn_share.R; 
 			Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> h_x = dyn_share.h_x;
+			Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> h_x_T_R_inv = dyn_share.h_x_T_R_inv;
+
 			// Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> h_v = dyn_share.h_v;
 			dof_Measurement = h_x.rows();
 			m_noise = dyn_share.M_Noise;
-			auto R = dyn_share.R;
+
+
 			// dof_Measurement_noise = dyn_share.R.rows();
 			// vectorized_state dx, dx_new;
 			// x_.boxminus(dx, x_propagated);
@@ -212,12 +216,14 @@ public:
 			Matrix<scalar_type, n, Eigen::Dynamic> K_;
 			// if(n > dof_Measurement)
 			{
-				PHT = P_. template block<n, 12>(0, 0) * h_x.transpose();
+				// PHT = P_. template block<n, 12>(0, 0) * h_x.transpose();
+				PHT = P_. template block<n, 12>(0, 0) * h_x_T_R_inv;
+
 				HPHT = h_x * PHT.topRows(12);
-				for (int m = 0; m < dof_Measurement; m++)
-				{
-					HPHT(m, m) += R(m);
-				}
+				// for (int m = 0; m < dof_Measurement; m++)
+				// {
+				// 	HPHT(m, m) += 1/R(m);
+				// }
 				K_= PHT*HPHT.inverse();
 			}
 			Matrix<scalar_type, n, 1> dx_ = K_ * z; // - h) + (K_x - Matrix<scalar_type, n, n>::Identity()) * dx_new; 
@@ -299,29 +305,71 @@ public:
 			h_dyn_share_modified_2(x_, dyn_share);
 
 			Matrix<scalar_type, 6, 1> z = dyn_share.z_IMU;
+			// auto R = dyn_share.R;
+			Matrix<double, 6, 30> H;
+			Matrix<double, 30, 6> HT;
+			H.setZero();
+			HT.setZero();
+			H.block<6,6>(0,15) = Eigen::Matrix<double, 6, 6>::Identity();
+			H.block<6,6>(0,24) = Eigen::Matrix<double, 6, 6>::Identity();
 
-			Matrix<double, 30, 6> PHT;
-            Matrix<double, 6, 30> HP;
-            Matrix<double, 6, 6> HPHT;
-			PHT.setZero();
-			HP.setZero();
-			HPHT.setZero();
 			for (int l_ = 0; l_ < 6; l_++)
 			{
-				if (!dyn_share.satu_check[l_])
+				if (dyn_share.satu_check[l_])
 				{
-					PHT.col(l_) = P_.col(15+l_) + P_.col(24+l_);
-					HP.row(l_) = P_.row(15+l_) + P_.row(24+l_);
+				  	H.block<6,6>(0,15)(l_, l_) = 0;
+					H.block<6,6>(0,24)(l_, l_) = 0;
 				}
 			}
-			for (int l_ = 0; l_ < 6; l_++)
+			std::cout <<" R.trace()"<<R_inv.trace() <<"\n";
+			std::cout <<" R = "<<R_inv<<"\n";
+
+			if(!R_inv.trace())
 			{
-				if (!dyn_share.satu_check[l_])
-				{
-					HPHT.col(l_) = HP.col(15+l_) + HP.col(24+l_);
-				}
-				HPHT(l_, l_) += dyn_share.R_IMU(l_); //, l);
+				HT = H.transpose();
+				// for (int l_ = 0; l_ < 6; l_++)
+				// {
+				// 	HT.block<6,6>(15,0)(l_, l_) *= dyn_share.R_IMU(l_);
+				// 	HT.block<6,6>(24,0)(l_, l_) *= dyn_share.R_IMU(l_);
+				// }
 			}
+			else
+			{
+				HT = H.transpose();
+				for (int l_ = 0; l_ < 6; l_++)
+				{
+					HT.block<6,6>(15,0)(l_, l_) *= R_inv(l_);
+					HT.block<6,6>(24,0)(l_, l_) *= R_inv(l_);
+				}
+			}
+			// std::cout <<" H"<<H <<"\n";
+			// std::cout <<" HT"<<HT <<"\n";
+
+			Matrix<double, 30, 6> PHT = P_ * HT;
+            Matrix<double, 6, 30> HP = H * P_;
+            Matrix<double, 6, 6> HPHT = H* P_ * HT ;
+			// PHT.setZero();
+			// HP.setZero();
+			// HPHT.setZero();
+			// for (int l_ = 0; l_ < 6; l_++)
+			// {
+			// 	if (!dyn_share.satu_check[l_])
+			// 	{
+			// 		PHT.col(l_) = P_.col(15+l_) + P_.col(24+l_);
+			// 		HP.row(l_) = P_.row(15+l_) + P_.row(24+l_);
+			// 	}
+			// }
+			// for (int l_ = 0; l_ < 6; l_++)
+			// {
+			// 	if (!dyn_share.satu_check[l_])
+			// 	{
+			// 		HPHT.col(l_) = HP.col(15+l_) + HP.col(24+l_);
+			// 	}
+			// 	// HPHT(l_, l_) += dyn_share.R_IMU(l_); //, l);
+			// }
+
+
+
         	Eigen::Matrix<double, 30, 6> K = PHT * HPHT.inverse(); 
                                     
             Matrix<scalar_type, n, 1> dx_ = K * z; 
@@ -366,6 +414,7 @@ private:
 	cov F_x1 = cov::Identity();
 	cov F_x2 = cov::Identity();
 	cov L_ = cov::Identity();
+	Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> R_inv;
 
 	processModel *f;
 	processMatrix1 *f_x;

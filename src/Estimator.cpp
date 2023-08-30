@@ -83,10 +83,14 @@ Eigen::Matrix<double, 24, 1> get_f_input(state_input &s, const input_ikfom &in)
 Eigen::Matrix<double, 30, 1> get_f_output(state_output &s, const input_ikfom &in)
 {
 	Eigen::Matrix<double, 30, 1> res = Eigen::Matrix<double, 30, 1>::Zero();
-	vect3 a_inertial = s.rot.normalized() * s.acc; 
+	// vect3 a_inertial = s.rot.normalized() * s.acc; 
+	vect3 omega;
+	in.gyro.boxminus(omega, s.bg);
+	vect3 a_inertial = s.rot.normalized() * (in.acc-s.ba); 
+
 	for(int i = 0; i < 3; i++ ){
 		res(i) = s.vel[i];
-		res(i + 3) = s.omg[i]; 
+		res(i + 3) = omega[i]; 
 		res(i + 12) = a_inertial[i] + s.gravity[i]; 
 	}
 	return res;
@@ -374,15 +378,21 @@ void h_model_output_modified(state_output &s, esekfom::dyn_share_modified<double
 		M3D& point_crossmat = crossmat_list[idx+j+1];
 		M3D rot_var =  kf_output.get_P() .block<3, 3>(0, 0);
 		M3D t_var = kf_output.get_P().block<3, 3>(3, 3);
-		cov = s.rot.toRotationMatrix() * cov * s.rot.toRotationMatrix() +
+		pv.cov  = s.rot.toRotationMatrix() * cov * s.rot.toRotationMatrix() +
 				(-point_crossmat) * rot_var * (-point_crossmat.transpose()) +
 				t_var;
-		pv.cov = cov;
+		// pv.cov = cov;
 		pv_list.push_back(pv);
+		// std::cout << "cov "  <<cov << "\n";
+		// std::cout << "pv.cov "  <<pv.cov << "\n";
+
+
 	}
     
 	BuildResidualListOMP(voxel_map, pv_list, ptpl_list);
 	effect_num_k = ptpl_list.size();
+	std::cout << "effect_num_k "  <<effect_num_k << "\n";
+
 	if (effect_num_k == 0) 
 	{
 		ekfom_data.valid = false;
@@ -390,6 +400,8 @@ void h_model_output_modified(state_output &s, esekfom::dyn_share_modified<double
 	}
 	ekfom_data.M_Noise = laser_point_cov;
 	ekfom_data.h_x = Eigen::MatrixXd::Zero(effect_num_k, 12);
+	ekfom_data.h_x_T_R_inv = Eigen::MatrixXd::Zero(12 , effect_num_k);
+
 	ekfom_data.z.resize(effect_num_k);
 	ekfom_data.R.resize(effect_num_k, 1);
 	Eigen::Matrix<double, 1, 3> J_abd;
@@ -403,35 +415,14 @@ void h_model_output_modified(state_output &s, esekfom::dyn_share_modified<double
 			V3D point_this(laser_p(0), laser_p(1), laser_p(2));
 			M3D cov;
 			calcBodyCov(point_this, ranging_cov, angle_cov, cov);
-			V3D norm_vec(ptpl_list[j].omega(0), ptpl_list[j].omega(1), ptpl_list[j].omega(2));
-			if (extrinsic_est_en)
-			{
-				// V3D p_body = pbody_list[idx+j+1];
-				M3D p_crossmat, p_imu_crossmat;
-				p_crossmat << SKEW_SYM_MATRX(point_this);
-				V3D point_imu = s.offset_R_L_I.normalized() * point_this + s.offset_T_L_I;
-				p_imu_crossmat << SKEW_SYM_MATRX(point_imu);
-				V3D C(s.rot.conjugate().normalized() * norm_vec);
-				V3D A(p_imu_crossmat * C);
-				V3D B(p_crossmat * s.offset_R_L_I.conjugate().normalized() * C);
-				ekfom_data.h_x.block<1, 12>(j, 0) << norm_vec(0), norm_vec(1), norm_vec(2), VEC_FROM_ARRAY(A), VEC_FROM_ARRAY(B), VEC_FROM_ARRAY(C);
-			}
-			else
-			{   
-                point_this = Lidar_R_wrt_IMU * point_this + Lidar_T_wrt_IMU;
-				M3D point_crossmat;
-                point_crossmat << SKEW_SYM_MATRX(point_this);
-				// M3D point_crossmat = crossmat_list[idx+j+1];
-				V3D C(s.rot.conjugate().normalized() * norm_vec);
-				V3D A(point_crossmat * C);
-				// V3D A(point_crossmat * state.rot_end.transpose() * norm_vec);
-				ekfom_data.h_x.block<1, 12>(j, 0) << norm_vec(0), norm_vec(1), norm_vec(2), VEC_FROM_ARRAY(A), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0;
-			}
-			//Calculate R_inv
 			V3D point_world = ptpl_list[j].point_world;
 			V3D Omega = ptpl_list[j].omega;
 			double Omega_norm = ptpl_list[j].omega_norm;
 			double dist = ptpl_list[j].dist;
+            V3D norm_vec = Omega / Omega_norm;
+
+			//Calculate R_inv
+
 			if (ptpl_list[j].main_direction == 0) { // ax+by+z+d = 0;
 				J_abd << point_world(0) * (1 - dist / (Omega_norm * Omega_norm)),
 						point_world(1) * (1 - dist / (Omega_norm * Omega_norm)), 1;
@@ -447,7 +438,35 @@ void h_model_output_modified(state_output &s, esekfom::dyn_share_modified<double
 			J_pw = Omega.transpose() * s.rot.toRotationMatrix() / Omega_norm;
 			double sigma_l = J_abd * ptpl_list[j].plane_cov * J_abd.transpose();
 			ekfom_data.z(j) = - ptpl_list[j].dist;
-			ekfom_data.R(j) = (sigma_l + J_pw * cov * J_pw.transpose());
+			double R_inv = 1/(sigma_l + J_pw * cov * J_pw.transpose());
+			ekfom_data.R(j) = R_inv;
+			std::cout << "R_inv "  <<R_inv << "\n";
+			if (extrinsic_est_en)
+			{
+				// V3D p_body = pbody_list[idx+j+1];
+				M3D p_crossmat, p_imu_crossmat;
+				p_crossmat << SKEW_SYM_MATRX(point_this);
+				V3D point_imu = s.offset_R_L_I.normalized() * point_this + s.offset_T_L_I;
+				p_imu_crossmat << SKEW_SYM_MATRX(point_imu);
+				V3D C(s.rot.conjugate().normalized() * norm_vec);
+				V3D A(p_imu_crossmat * C);
+				V3D B(p_crossmat * s.offset_R_L_I.conjugate().normalized() * C);
+				ekfom_data.h_x.block<1, 12>(j, 0) << norm_vec(0), norm_vec(1), norm_vec(2), VEC_FROM_ARRAY(A), VEC_FROM_ARRAY(B), VEC_FROM_ARRAY(C);
+				ekfom_data.h_x_T_R_inv.col(j) <<  norm_vec[0] * R_inv , norm_vec[1] * R_inv , norm_vec[2] * R_inv , A[0] * R_inv , A[1] * R_inv ,A[2] * R_inv, B[0] * R_inv , B[1] * R_inv ,B[2] * R_inv, C[0] * R_inv , C[1] * R_inv ,C[2] * R_inv;
+			}
+			else
+			{   
+                point_this = Lidar_R_wrt_IMU * point_this + Lidar_T_wrt_IMU;
+				M3D point_crossmat;
+                point_crossmat << SKEW_SYM_MATRX(point_this);
+				// M3D point_crossmat = crossmat_list[idx+j+1];
+				V3D C(s.rot.conjugate().normalized() * norm_vec);
+				V3D A(point_crossmat * C);
+				// V3D A(point_crossmat * state.rot_end.transpose() * norm_vec);
+				ekfom_data.h_x.block<1, 12>(j, 0) << norm_vec(0), norm_vec(1), norm_vec(2), VEC_FROM_ARRAY(A), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0;
+				ekfom_data.h_x_T_R_inv.col(j) <<  norm_vec[0] * R_inv , norm_vec[1] * R_inv , norm_vec[2] * R_inv , A[0] * R_inv , A[1] * R_inv ,A[2] * R_inv;
+
+			}
 
 	}
 	effct_feat_num += effect_num_k;
